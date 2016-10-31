@@ -454,7 +454,7 @@ void benchcore(const char *host,const int port,const char *req)
               {
                  failed++;
                  close(s);
-                 /*goto nexttry;*/
+                 goto nexttry;
               }
 	       else
 		       if(i==0) break;
