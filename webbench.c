@@ -13,8 +13,8 @@
  *    1 - benchmark failed (server is not on-line)
  *    2 - bad param
  *    3 - internal error, fork failed
- * 
- */ 
+ *
+ */
 #include "socket.c"
 #include <unistd.h>
 #include <sys/param.h>
@@ -30,7 +30,7 @@ int speed=0;
 int failed=0;
 int bytes=0;
 /* globals */
-int http10=1; /* 0 - http/0.9, 1 - http/1.0, 2 - http/1.1 */
+int http10=2; /* 0 - http/0.9, 1 - http/1.0, 2 - http/1.1 */
 /* Allow: GET, HEAD, OPTIONS, TRACE */
 #define METHOD_GET 0
 #define METHOD_HEAD 1
@@ -47,6 +47,8 @@ int benchtime=30;
 /* internal */
 int mypipe[2];
 char host[MAXHOSTNAMELEN];
+char host_set[MAXHOSTNAMELEN];
+int flag_host_set = 0;
 #define REQUEST_SIZE 2048
 char request[REQUEST_SIZE];
 
@@ -66,6 +68,7 @@ static const struct option long_options[]=
  {"version",no_argument,NULL,'V'},
  {"proxy",required_argument,NULL,'p'},
  {"clients",required_argument,NULL,'c'},
+ {"host",required_argument,NULL,'H'},
  {NULL,0,NULL,0}
 };
 
@@ -77,7 +80,7 @@ static void build_request(const char *url);
 static void alarm_handler(int signal)
 {
    timerexpired=1;
-}	
+}
 
 static void usage(void)
 {
@@ -94,6 +97,7 @@ static void usage(void)
 	"  --get                    Use GET request method.\n"
 	"  --head                   Use HEAD request method.\n"
 	"  --options                Use OPTIONS request method.\n"
+	"  -H|--host                Set 'Host:' field in HTTP header.\n"
 	"  --trace                  Use TRACE request method.\n"
 	"  -?|-h|--help             This information.\n"
 	"  -V|--version             Display program version.\n"
@@ -109,21 +113,27 @@ int main(int argc, char *argv[])
  {
 	  usage();
           return 2;
- } 
+ }
 
- while((opt=getopt_long(argc,argv,"912Vfrt:p:c:?h",long_options,&options_index))!=EOF )
+ bzero(host_set,MAXHOSTNAMELEN);
+ while((opt=getopt_long(argc,argv,"912Vfrt:p:c:H:?h",long_options,&options_index))!=EOF )
  {
   switch(opt)
   {
    case  0 : break;
    case 'f': force=1;break;
-   case 'r': force_reload=1;break; 
+   case 'r': force_reload=1;break;
    case '9': http10=0;break;
    case '1': http10=1;break;
    case '2': http10=2;break;
    case 'V': printf(PROGRAM_VERSION"\n");exit(0);
-   case 't': benchtime=atoi(optarg);break;	     
-   case 'p': 
+   case 't': benchtime=atoi(optarg);break;
+   case 'H':
+        strncpy(host_set, optarg, (strlen(optarg)<MAXHOSTNAMELEN) ? strlen(optarg) : MAXHOSTNAMELEN);
+        printf("Set Host: %s\n", host_set);
+        flag_host_set = 1;
+        break;
+   case 'p':
 	     /* proxy server parsing server:port */
 	     tmp=strrchr(optarg,':');
 	     proxyhost=optarg;
@@ -149,7 +159,7 @@ int main(int argc, char *argv[])
    case 'c': clients=atoi(optarg);break;
   }
  }
- 
+
  if(optind==argc) {
                       fprintf(stderr,"webbench: Missing URL!\n");
 		      usage();
@@ -217,7 +227,7 @@ void build_request(const char *url)
 	  case METHOD_OPTIONS: strcpy(request,"OPTIONS");break;
 	  case METHOD_TRACE: strcpy(request,"TRACE");break;
   }
-		  
+
   strcat(request," ");
 
   if(NULL==strstr(url,"://"))
@@ -231,7 +241,7 @@ void build_request(const char *url)
 	 exit(2);
   }
   if(proxyhost==NULL)
-	   if (0!=strncasecmp("http://",url,7)) 
+	   if (0!=strncasecmp("http://",url,7))
 	   { fprintf(stderr,"\nOnly HTTP protocol is directly supported, set --proxy for others.\n");
              exit(2);
            }
@@ -250,7 +260,7 @@ void build_request(const char *url)
       index(url+i,':')<index(url+i,'/'))
    {
 	   strncpy(host,url+i,strchr(url+i,':')-url-i);
-	   bzero(tmp,10);
+	   bzero (tmp,10);
 	   strncpy(tmp,index(url+i,':')+1,strchr(url+i,'/')-index(url+i,':')-1);
 	   /* printf("tmp=%s\n",tmp); */
 	   proxyport=atoi(tmp);
@@ -276,7 +286,10 @@ void build_request(const char *url)
   if(proxyhost==NULL && http10>0)
   {
 	  strcat(request,"Host: ");
-	  strcat(request,host);
+      if(flag_host_set)
+	    strcat(request,host_set);
+      else
+	    strcat(request,host);
 	  strcat(request,"\r\n");
   }
   if(force_reload && proxyhost!=NULL)
@@ -284,22 +297,25 @@ void build_request(const char *url)
 	  strcat(request,"Pragma: no-cache\r\n");
   }
   if(http10>1)
-	  strcat(request,"Connection: close\r\n");
+	  /*strcat(request,"Connection: close\r\n");*/
+	  strcat(request,"Connection: keep-alive\r\n");
   /* add empty line at end */
-  if(http10>0) strcat(request,"\r\n"); 
-  // printf("Req=%s\n",request);
+  if(http10>0) strcat(request,"\r\n");
+  printf("\n");
+  printf("******* HTTP Header ******\n%s\n",request);
+  printf("**************************\n");
 }
 
 /* vraci system rc error kod */
 static int bench(void)
 {
-  int i,j,k;	
+  int i,j,k;
   pid_t pid=0;
   FILE *f;
 
   /* check avaibility of target server */
   i=Socket(proxyhost==NULL?host:proxyhost,proxyport);
-  if(i<0) { 
+  if(i<0) {
 	   fprintf(stderr,"\nConnect to server failed. Aborting benchmark.\n");
            return 1;
          }
@@ -353,14 +369,14 @@ static int bench(void)
 		 perror("open pipe for writing failed.");
 		 return 3;
 	 }
-	 /* fprintf(stderr,"Child - %d %d\n",speed,failed); */
+     fprintf(stderr,"Child - %d %d\n",speed,failed);
 	 fprintf(f,"%d %d %d\n",speed,failed,bytes);
 	 fclose(f);
 	 return 0;
   } else
   {
 	  f=fdopen(mypipe[0],"r");
-	  if(f==NULL) 
+	  if(f==NULL)
 	  {
 		  perror("open pipe for reading failed.");
 		  return 3;
@@ -421,24 +437,24 @@ void benchcore(const char *host,const int port,const char *req)
        }
        return;
     }
-    s=Socket(host,port);                          
-    if(s<0) { failed++;continue;} 
+    s=Socket(host,port);
+    if(s<0) { failed++;continue;}
     if(rlen!=write(s,req,rlen)) {failed++;close(s);continue;}
-    if(http10==0) 
+    if(http10==0)
 	    if(shutdown(s,1)) { failed++;close(s);continue;}
-    if(force==0) 
+    if(force==0)
     {
             /* read all available data from socket */
 	    while(1)
 	    {
-              if(timerexpired) break; 
+              if(timerexpired) break;
 	      i=read(s,buf,1500);
-              /* fprintf(stderr,"%d\n",i); */
-	      if(i<0) 
-              { 
+               fprintf(stderr,"***Receive %d Bytes***\n%s\n",i, buf);
+	      if(i<0)
+              {
                  failed++;
                  close(s);
-                 goto nexttry;
+                 /*goto nexttry;*/
               }
 	       else
 		       if(i==0) break;
